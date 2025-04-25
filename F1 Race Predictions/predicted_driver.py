@@ -6,11 +6,9 @@ import pandas as pd
 import numpy as np
 import requests
 
-# 1. Load model & raw results
 model_pos  = joblib.load('model_pos.pkl')
 results_df = joblib.load('results_df.pkl')
 
-# 2. Rebuild historical df with circuit info
 sessions = pd.read_csv('sessions.csv', parse_dates=['date_start','date_end'])
 race_sessions = (
     sessions[sessions['session_type']=='Race']
@@ -24,8 +22,7 @@ hist = race_sessions.merge(
     how='inner'
 )
 
-# 3. Compute historical features
-# 3a. driver_form = rolling mean finish over last 5 races
+
 hist = hist.sort_values(['driver','year','round']).reset_index(drop=True)
 hist['driver_form'] = (
     hist.groupby('driver')['position']
@@ -34,7 +31,7 @@ hist['driver_form'] = (
         .reset_index(level=0, drop=True)
 )
 
-# 3b. driver_volatility = rolling std of last 5 finishes
+
 hist['driver_volatility'] = (
     hist.groupby('driver')['position']
         .rolling(5, min_periods=1)
@@ -42,7 +39,6 @@ hist['driver_volatility'] = (
         .reset_index(level=0, drop=True)
 ).fillna(hist['position'].std())
 
-# 3c. track_volatility = std of (finish - grid) by circuit locality
 hist['delta'] = hist['position'] - hist['grid']
 track_vol = (
     hist.groupby('location')['delta']
@@ -51,23 +47,19 @@ track_vol = (
 )
 hist = hist.merge(track_vol, on='location', how='left')
 
-# 4. Identify next race
+# pick race
 year, rnd = 2024, 2
 
-# 4a. Discover circuit locality via Ergast
 curl = f'http://ergast.com/api/f1/{year}/{rnd}/circuits.json'
 cres = requests.get(curl, timeout=5); cres.raise_for_status()
 loc = cres.json()['MRData']['CircuitTable']['Circuits'][0]['Location']['locality']
 
-# 4b. Lookup this track’s volatility
 tv = track_vol.get(loc, track_vol.mean())
 
-# 5. Fetch qualifying to get grid slots
 qurl = f'http://ergast.com/api/f1/{year}/{rnd}/qualifying.json?limit=30'
 qres = requests.get(qurl, timeout=5); qres.raise_for_status()
 qual = qres.json()['MRData']['RaceTable']['Races'][0]['QualifyingResults']
 
-# 6. Build upcoming_df with all 4 features
 rows = []
 for r in qual:
     drv  = r['Driver']['driverId']
@@ -89,7 +81,6 @@ for r in qual:
 
 up_df = pd.DataFrame(rows)
 
-# 7. Predict & rank
 up_df['pred_pos'] = model_pos.predict(
     up_df[['grid','driver_form','driver_volatility','track_volatility']]
 )
@@ -100,6 +91,5 @@ pred_df = (
          .assign(predicted_finish=lambda d: d.index+1)
 )
 
-# 8. Output
 print(f"\nPredicted finishing order for {year} round {rnd} ({loc}):\n")
 print(pred_df[['predicted_finish','driver','grid','pred_pos']].to_string(index=False))
